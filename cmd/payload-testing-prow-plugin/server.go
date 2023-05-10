@@ -190,22 +190,6 @@ func (s *server) handle(l *logrus.Entry, ic github.IssueCommentEvent) string {
 
 	logger.WithField("ic.Comment.Body", ic.Comment.Body).Trace("received a comment")
 
-	startTrustedUser := time.Now()
-	trusted, err := s.trustedChecker.trustedUser(ic.Comment.User.Login, org, repo, prNumber)
-	logger.WithField("duration", time.Since(startTrustedUser)).Debug("trustedUser completed")
-	if err != nil {
-		logger.WithError(err).WithField("user", ic.Comment.User.Login).Error("could not check if the user is trusted")
-		return formatError(fmt.Errorf("could not check if the user %s is trusted for pull request %s/%s#%d: %w", ic.Comment.User.Login, org, repo, prNumber, err))
-	}
-	if !trusted {
-		logger.WithField("user", ic.Comment.User.Login).Error("the user is not trusted")
-		return fmt.Sprintf("user %s is not trusted for pull request %s/%s#%d", ic.Comment.User.Login, org, repo, prNumber)
-	}
-
-	if ocpPayloadAbortPattern.MatchString(strings.TrimSpace(ic.Comment.Body)) {
-		return s.abortAll(logger, ic)
-	}
-
 	specs := specsFromComment(ic.Comment.Body)
 	jobsFromComment := jobsFromComment(ic.Comment.Body)
 	if len(specs) == 0 {
@@ -219,8 +203,25 @@ func (s *server) handle(l *logrus.Entry, ic github.IssueCommentEvent) string {
 		specs = append(specs, jobSetSpecification{})
 	}
 
-	if len(specs) == 0 {
+	abortRequested := ocpPayloadAbortPattern.MatchString(strings.TrimSpace(ic.Comment.Body))
+	if len(specs) == 0 && !abortRequested {
 		return ""
+	}
+
+	startTrustedUser := time.Now()
+	trusted, err := s.trustedChecker.trustedUser(ic.Comment.User.Login, org, repo, prNumber)
+	logger.WithField("duration", time.Since(startTrustedUser)).Debug("trustedUser completed")
+	if err != nil {
+		logger.WithError(err).WithField("user", ic.Comment.User.Login).Error("could not check if the user is trusted")
+		return formatError(fmt.Errorf("could not check if the user %s is trusted for pull request %s/%s#%d: %w", ic.Comment.User.Login, org, repo, prNumber, err))
+	}
+	if !trusted {
+		logger.WithField("user", ic.Comment.User.Login).Error("the user is not trusted")
+		return fmt.Sprintf("user %s is not trusted for pull request %s/%s#%d", ic.Comment.User.Login, org, repo, prNumber)
+	}
+
+	if abortRequested {
+		return s.abortAll(logger, ic)
 	}
 
 	startGetPullRequest := time.Now()
