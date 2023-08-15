@@ -197,7 +197,7 @@ func main() {
 	}
 	// "i just don't want spam"
 	klog.LogToStderr(false)
-	logrus.Infof("%s version %s", version.Name, version.Version)
+	logrus.Infof("%s version %s, built on sgoeddel's laptop", version.Name, version.Version)
 	flagSet := flag.NewFlagSet("", flag.ExitOnError)
 	opt := bindOptions(flagSet)
 	opt.censor = censor
@@ -551,6 +551,9 @@ func (o *options) Complete() error {
 	} else {
 		config, err = o.loadConfig(info)
 	}
+	logrus.Info("ci-operator config:\n")
+	marshalledConfig, _ := yaml.Marshal(&config)
+	_ = api.SaveArtifact(o.censor, "resolved-ci-operator-config.yaml", marshalledConfig)
 
 	if err != nil {
 		return results.ForReason("loading_config").WithError(err).Errorf("failed to load configuration: %v", err)
@@ -565,6 +568,7 @@ func (o *options) Complete() error {
 		return results.ForReason("validating_config").ForError(err)
 	}
 	o.graphConfig = defaults.FromConfigStatic(o.configSpec)
+
 	if err := validation.IsValidGraphConfiguration(o.graphConfig.Steps); err != nil {
 		return results.ForReason("validating_config").ForError(err)
 	}
@@ -892,6 +896,7 @@ func (o *options) Run() []error {
 		return []error{fmt.Errorf("unable to write metadata.json for build: %w", err)}
 	}
 	// convert the full graph into the subset we must run
+	logrus.Infof("target values: %v", o.targets.values)
 	nodes, err := api.BuildPartialGraph(buildSteps, o.targets.values)
 	if err != nil {
 		return []error{results.ForReason("building_graph").WithError(err).Errorf("could not build execution graph: %v", err)}
@@ -900,7 +905,12 @@ func (o *options) Run() []error {
 	if errs != nil {
 		return append([]error{results.ForReason("building_graph").ForError(errors.New("could not sort nodes"))}, errs...)
 	}
-	logrus.Infof("Running %s", strings.Join(nodeNames(stepList), ", "))
+	namesToType := nodeNamesToType(stepList)
+	var namesToPrint []string
+	for name, t := range namesToType {
+		namesToPrint = append(namesToPrint, fmt.Sprintf("%s-%s", name, t))
+	}
+	logrus.Infof("Running %s", strings.Join(namesToPrint, ", "))
 	if o.printGraph {
 		if err := printDigraph(os.Stdout, stepList); err != nil {
 			return []error{fmt.Errorf("could not print graph: %w", err)}
@@ -1812,14 +1822,14 @@ func jobSpecFromGitRef(ref string) (*api.JobSpec, error) {
 	return spec, nil
 }
 
-func nodeNames(nodes []*api.StepNode) []string {
-	var names []string
+func nodeNamesToType(nodes []*api.StepNode) map[string]string {
+	names := make(map[string]string, len(nodes))
 	for _, node := range nodes {
 		name := node.Step.Name()
 		if len(name) == 0 {
 			name = fmt.Sprintf("<%T>", node.Step)
 		}
-		names = append(names, name)
+		names[name] = fmt.Sprintf("<%T>", node.Step)
 	}
 	return names
 }

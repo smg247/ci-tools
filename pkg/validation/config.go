@@ -61,13 +61,13 @@ type configContext struct {
 	field fieldPath
 	// Shared reference to a map containing pipeline image tags seen so far.
 	// All derivative contexts will point to the same map.
-	pipelineImages map[api.PipelineImageStreamTagReference]string
+	pipelineImages map[string]string
 }
 
 // NewConfigContext creates a top-level, empty context.
 func NewConfigContext() *configContext {
 	return &configContext{
-		pipelineImages: make(map[api.PipelineImageStreamTagReference]string),
+		pipelineImages: make(map[string]string),
 	}
 }
 
@@ -96,12 +96,16 @@ func (c *configContext) addKey(k string) *configContext {
 // addPipelineImage verifies that a pipeline image tag has not been seen.
 // An error containing the name of the original field is returned if the tag has
 // already been seen in the same configuration.
-func (c *configContext) addPipelineImage(name api.PipelineImageStreamTagReference) error {
-	previous, seen := c.pipelineImages[name]
-	if seen {
-		return c.errorf("duplicate image name '%s' (previously defined by field '%s')", string(name), previous)
+func (c *configContext) addPipelineImage(name api.PipelineImageStreamTagReference, refIndex int) error {
+	fullName := string(name)
+	if refIndex >= 0 {
+		fullName = fmt.Sprintf("%s-%d", string(name), refIndex)
 	}
-	c.pipelineImages[name] = string(c.field)
+	previous, seen := c.pipelineImages[fullName]
+	if seen {
+		return c.errorf("duplicate image name '%s' (previously defined by field '%s')", fullName, previous)
+	}
+	c.pipelineImages[fullName] = string(c.field)
 	return nil
 }
 
@@ -130,16 +134,24 @@ func IsValidConfiguration(config *api.ReleaseBuildConfiguration, org, repo strin
 func (v *Validator) validateConfiguration(ctx *configContext, config *api.ReleaseBuildConfiguration, org, repo string, resolved bool) error {
 	var validationErrors []error
 	if config.BinaryBuildCommands != "" {
-		ctx.pipelineImages[api.PipelineImageStreamTagReferenceBinaries] = "binary_build_commands"
+		ctx.pipelineImages[string(api.PipelineImageStreamTagReferenceBinaries)] = "binary_build_commands"
 	}
 	if config.TestBinaryBuildCommands != "" {
-		ctx.pipelineImages[api.PipelineImageStreamTagReferenceTestBinaries] = "test_binary_build_commands"
+		ctx.pipelineImages[string(api.PipelineImageStreamTagReferenceTestBinaries)] = "test_binary_build_commands"
 	}
 	if config.RpmBuildCommands != "" {
-		ctx.pipelineImages[api.PipelineImageStreamTagReferenceRPMs] = "rpm_build_commands"
+		ctx.pipelineImages[string(api.PipelineImageStreamTagReferenceRPMs)] = "rpm_build_commands"
 	}
 	validationErrors = append(validationErrors, validateReleaseBuildConfiguration(config, org, repo)...)
-	validationErrors = append(validationErrors, validateBuildRootImageConfiguration(ctx.AddField("build_root"), config.InputConfiguration.BuildRootImage, len(config.Images) > 0)...)
+	if config.InputConfiguration.BuildRootImage != nil {
+		validationErrors = append(validationErrors, validateBuildRootImageConfiguration(ctx.AddField("build_root"), config.InputConfiguration.BuildRootImage, len(config.Images) > 0, 0)...)
+	} else if len(config.InputConfiguration.BuildRoots) > 0 {
+		index := 0
+		for _, buildRoot := range config.InputConfiguration.BuildRoots {
+			index++
+			validationErrors = append(validationErrors, validateBuildRootImageConfiguration(ctx.AddField("build_roots"), &buildRoot, len(config.Images) > 0, index)...)
+		}
+	}
 
 	if config.Operator != nil {
 		validationErrors = append(validationErrors, ValidateOperator(ctx.AddField("operator"), config)...)
@@ -203,7 +215,7 @@ func (v *Validator) ValidateTestStepConfiguration(ctx *configContext, config *ap
 	return validationErrors
 }
 
-func validateBuildRootImageConfiguration(ctx *configContext, input *api.BuildRootImageConfiguration, hasImages bool) (ret []error) {
+func validateBuildRootImageConfiguration(ctx *configContext, input *api.BuildRootImageConfiguration, hasImages bool, refIndex int) (ret []error) {
 	if input == nil {
 		if hasImages {
 			return []error{errors.New("when 'images' are specified 'build_root' is required and must have image_stream_tag, project_image or from_repository set")}
@@ -222,7 +234,7 @@ func validateBuildRootImageConfiguration(ctx *configContext, input *api.BuildRoo
 	} else if input.ImageStreamTagReference != nil {
 		ret = append(ret, validateBuildRootImageStreamTag(ctx.AddField("image_stream_tag"), *input.ImageStreamTagReference)...)
 	}
-	if err := ctx.addPipelineImage(api.PipelineImageStreamTagReferenceRoot); err != nil {
+	if err := ctx.addPipelineImage(api.PipelineImageStreamTagReferenceRoot, refIndex); err != nil {
 		ret = append(ret, err)
 	}
 	return
@@ -249,7 +261,7 @@ func ValidateImages(ctx *configContext, images []api.ProjectDirectoryImageBuildS
 		if image.To == "" {
 			validationErrors = append(validationErrors, ctxN.errorf("`to` must be set"))
 		}
-		if err := ctxN.addPipelineImage(image.To); err != nil {
+		if err := ctxN.addPipelineImage(image.To, -1); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 		if image.DockerfileLiteral != nil && (image.ContextDir != "" || image.DockerfilePath != "") {
@@ -276,7 +288,7 @@ func LinkForImage(image string, config *api.ReleaseBuildConfiguration) api.StepL
 
 func validateOperator(ctx *configContext, input *api.OperatorStepConfiguration, linkForImage func(string) api.StepLink) []error {
 	var validationErrors []error
-	if err := ctx.addPipelineImage(api.PipelineImageStreamTagReferenceBundleSource); err != nil {
+	if err := ctx.addPipelineImage(api.PipelineImageStreamTagReferenceBundleSource, -1); err != nil {
 		validationErrors = append(validationErrors, err)
 	}
 	for num, bundle := range input.Bundles {
@@ -288,10 +300,10 @@ func validateOperator(ctx *configContext, input *api.OperatorStepConfiguration, 
 		} else {
 			ctxImage = ctxN.AddField("as")
 		}
-		if err := ctxImage.addPipelineImage(api.PipelineImageStreamTagReference(imageName)); err != nil {
+		if err := ctxImage.addPipelineImage(api.PipelineImageStreamTagReference(imageName), -1); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
-		if err := ctxImage.addPipelineImage(api.PipelineImageStreamTagReference(api.IndexName(imageName))); err != nil {
+		if err := ctxImage.addPipelineImage(api.PipelineImageStreamTagReference(api.IndexName(imageName)), -1); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 		if bundle.As == "" && bundle.BaseIndex != "" {
@@ -337,7 +349,7 @@ func ValidateOperatorSubstitution(ctx *configContext, sub api.PullSpecSubstituti
 func ValidateBaseImages(ctx *configContext, images map[string]api.ImageStreamTagReference) []error {
 	ret := validateImageStreamTagReferenceMap("base_images", images)
 	for name := range images {
-		if err := ctx.addKey(name).addPipelineImage(api.PipelineImageStreamTagReference(name)); err != nil {
+		if err := ctx.addKey(name).addPipelineImage(api.PipelineImageStreamTagReference(name), -1); err != nil {
 			ret = append(ret, err)
 		}
 	}
@@ -348,10 +360,10 @@ func validateBaseRPMImages(ctx *configContext, images map[string]api.ImageStream
 	ret := validateImageStreamTagReferenceMap("base_rpm_images", images)
 	for name := range images {
 		ctxN := ctx.addKey(name)
-		if err := ctxN.addPipelineImage(api.PipelineImageStreamTagReference(fmt.Sprintf("%s-without-rpms", name))); err != nil {
+		if err := ctxN.addPipelineImage(api.PipelineImageStreamTagReference(fmt.Sprintf("%s-without-rpms", name)), -1); err != nil {
 			ret = append(ret, err)
 		}
-		if err := ctxN.addPipelineImage(api.PipelineImageStreamTagReference(name)); err != nil {
+		if err := ctxN.addPipelineImage(api.PipelineImageStreamTagReference(name), -1); err != nil {
 			ret = append(ret, err)
 		}
 	}

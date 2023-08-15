@@ -16,7 +16,7 @@ import (
 	"github.com/openshift/ci-tools/pkg/steps/utils"
 )
 
-func rawCommandDockerfile(from api.PipelineImageStreamTagReference, commands string) string {
+func rawCommandDockerfile(from string, commands string) string {
 	return fmt.Sprintf(`FROM %s:%s
 RUN ["/bin/bash", "-c", %s]`, api.PipelineImageStream, from, strconv.Quote(fmt.Sprintf("set -o errexit; umask 0002; %s", commands)))
 }
@@ -41,13 +41,15 @@ func (s *pipelineImageCacheStep) Run(ctx context.Context) error {
 }
 
 func (s *pipelineImageCacheStep) run(ctx context.Context) error {
-	dockerfile := rawCommandDockerfile(s.config.From, s.config.Commands)
-	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, s.config.From, s.jobSpec)
+	from := fmt.Sprintf("%s-%d", s.config.From, s.config.RefIndex)
+	to := fmt.Sprintf("%s-%d", s.config.To, s.config.RefIndex)
+	dockerfile := rawCommandDockerfile(from, s.config.Commands)
+	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, from, s.jobSpec)
 	if err != nil {
 		return err
 	}
 	return handleBuilds(ctx, s.client, s.podClient, *buildFromSource(
-		s.jobSpec, s.config.From, s.config.To,
+		s.jobSpec, from, to,
 		buildapi.BuildSource{
 			Type:       buildapi.BuildSourceDockerfile,
 			Dockerfile: &dockerfile,
@@ -56,7 +58,7 @@ func (s *pipelineImageCacheStep) run(ctx context.Context) error {
 		"",
 		s.resources,
 		s.pullSecret,
-		nil,
+		nil, s.config.RefIndex,
 	))
 }
 

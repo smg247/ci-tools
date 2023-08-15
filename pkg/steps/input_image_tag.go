@@ -63,7 +63,8 @@ func (s *inputImageTagStep) Run(ctx context.Context) error {
 }
 
 func (s *inputImageTagStep) run(ctx context.Context) error {
-	logrus.Infof("Tagging %s into %s:%s.", s.config.BaseImage.ISTagName(), api.PipelineImageStream, s.config.To)
+	to := fmt.Sprintf("%s-%d", s.config.To, s.config.RefIndex)
+	logrus.Infof("Tagging %s into %s:%s.", s.config.BaseImage.ISTagName(), api.PipelineImageStream, to)
 
 	if _, err := s.Inputs(); err != nil {
 		return fmt.Errorf("could not resolve inputs for image tag step: %w", err)
@@ -71,7 +72,7 @@ func (s *inputImageTagStep) run(ctx context.Context) error {
 
 	ist := &imagev1.ImageStreamTag{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s:%s", api.PipelineImageStream, s.config.To),
+			Name:      fmt.Sprintf("%s:%s", api.PipelineImageStream, to),
 			Namespace: s.jobSpec.Namespace(),
 		},
 		Tag: &imagev1.TagReference{
@@ -101,13 +102,13 @@ func (s *inputImageTagStep) run(ctx context.Context) error {
 		if err := s.client.Get(importCtx, ctrlruntimeclient.ObjectKey{Namespace: s.jobSpec.Namespace(), Name: api.PipelineImageStream}, pipeline); err != nil {
 			return false, err
 		}
-		_, exists := util.ResolvePullSpec(pipeline, string(s.config.To), true)
+		_, exists := util.ResolvePullSpec(pipeline, to, true)
 		if !exists {
 			logrus.Debugf("Waiting to import %s ...", ist.ObjectMeta.Name)
 		}
 		return exists, nil
 	}, importCtx.Done()); err != nil {
-		logrus.WithError(err).Errorf("Could not resolve tag %s in imagestream %s.", s.config.To, api.PipelineImageStream)
+		logrus.WithError(err).Errorf("Could not resolve tag %s in imagestream %s.", to, api.PipelineImageStream)
 		return err
 	}
 	return nil

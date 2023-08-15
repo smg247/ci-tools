@@ -51,7 +51,7 @@ func (s *projectDirectoryImageBuildStep) run(ctx context.Context) error {
 		return err
 	}
 	build := buildFromSource(
-		s.jobSpec, s.config.From, s.config.To,
+		s.jobSpec, string(s.config.From), string(s.config.To),
 		buildapi.BuildSource{
 			Type:       buildapi.BuildSourceImage,
 			Dockerfile: s.config.DockerfileLiteral,
@@ -61,7 +61,7 @@ func (s *projectDirectoryImageBuildStep) run(ctx context.Context) error {
 		s.config.DockerfilePath,
 		s.resources,
 		s.pullSecret,
-		s.config.BuildArgs,
+		s.config.BuildArgs, s.config.RefIndex,
 	)
 	return handleBuilds(ctx, s.client, s.podClient, *build)
 }
@@ -69,22 +69,23 @@ func (s *projectDirectoryImageBuildStep) run(ctx context.Context) error {
 type workingDir func(tag string) (string, error)
 type isBundleImage func(tag string) bool
 
-func imagesFor(config api.ProjectDirectoryImageBuildStepConfiguration, workingDir workingDir, isBundleImage isBundleImage) (api.PipelineImageStreamTagReference, []buildapi.ImageSource, error) {
+func imagesFor(config api.ProjectDirectoryImageBuildStepConfiguration, workingDir workingDir, isBundleImage isBundleImage) (string, []buildapi.ImageSource, error) {
 	images := buildInputsFromStep(config.Inputs)
-	var sourceTag api.PipelineImageStreamTagReference
+	var sourceTag string
 	var contextDir string
 	if isBundleImage(string(config.To)) {
 		// use the operator bundle source for bundle images
-		sourceTag = api.PipelineImageStreamTagReferenceBundleSource
+		sourceTag = string(api.PipelineImageStreamTagReferenceBundleSource)
 		contextDir = config.ContextDir
 	} else if api.IsIndexImage(string(config.To)) {
 		// use the index source for index images
-		sourceTag = api.IndexGeneratorName(config.To)
+		sourceTag = string(api.IndexGeneratorName(config.To))
 	} else {
 		// default to using the normal pipeline source image
-		sourceTag = api.PipelineImageStreamTagReferenceSource
+		sourceTag = string(api.PipelineImageStreamTagReferenceSource)
 		contextDir = config.ContextDir
 	}
+	sourceTag = fmt.Sprintf("%s-%d", sourceTag, config.RefIndex)
 	if _, overwritten := config.Inputs[string(sourceTag)]; !overwritten {
 		// if the user has not overwritten the source, we need to make sure it's mounted in
 		source := fmt.Sprintf("%s:%s", api.PipelineImageStream, sourceTag)

@@ -86,7 +86,7 @@ func (s *indexGeneratorStep) run(ctx context.Context) error {
 		return err
 	}
 	fromTag := api.PipelineImageStreamTagReferenceSource
-	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, fromTag, s.jobSpec)
+	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, string(fromTag), s.jobSpec)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (s *indexGeneratorStep) run(ctx context.Context) error {
 		})
 	}
 	build := buildFromSource(
-		s.jobSpec, fromTag, s.config.To,
+		s.jobSpec, string(fromTag), string(s.config.To),
 		buildapi.BuildSource{
 			Type:       buildapi.BuildSourceDockerfile,
 			Dockerfile: &dockerfile,
@@ -119,7 +119,7 @@ func (s *indexGeneratorStep) run(ctx context.Context) error {
 		"",
 		s.resources,
 		s.pullSecret,
-		nil,
+		nil, 0,
 	)
 	err = handleBuilds(ctx, s.client, s.podClient, *build)
 	if err != nil && strings.Contains(err.Error(), "error checking provided apis") {

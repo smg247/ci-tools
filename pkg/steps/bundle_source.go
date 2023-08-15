@@ -49,12 +49,12 @@ func (s *bundleSourceStep) run(ctx context.Context) error {
 		return err
 	}
 	fromTag := api.PipelineImageStreamTagReferenceSource
-	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, fromTag, s.jobSpec)
+	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, string(fromTag), s.jobSpec)
 	if err != nil {
 		return err
 	}
 	build := buildFromSource(
-		s.jobSpec, fromTag, api.PipelineImageStreamTagReferenceBundleSource,
+		s.jobSpec, string(fromTag), string(api.PipelineImageStreamTagReferenceBundleSource),
 		buildapi.BuildSource{
 			Type:       buildapi.BuildSourceDockerfile,
 			Dockerfile: &dockerfile,
@@ -76,6 +76,7 @@ func (s *bundleSourceStep) run(ctx context.Context) error {
 		s.resources,
 		s.pullSecret,
 		nil,
+		0, //TODO: this will have to be better thought out, but for now..
 	)
 	return handleBuilds(ctx, s.client, s.podClient, *build)
 }

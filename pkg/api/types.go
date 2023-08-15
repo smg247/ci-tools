@@ -40,16 +40,19 @@ type ReleaseBuildConfiguration struct {
 	// contains the output of this command. This allows reuse of binary artifacts
 	// across other steps. If empty, no "bin" image will be created.
 	BinaryBuildCommands string `json:"binary_build_commands,omitempty"`
+
+	BinaryBuildCommandList []BinaryBuildCommandByRepo `json:"binary_build_by_repo,omitempty"`
+
 	// TestBinaryBuildCommands will create a "test-bin" image based on "src" that
 	// contains the output of this command. This allows reuse of binary artifacts
 	// across other steps. If empty, no "test-bin" image will be created.
-	TestBinaryBuildCommands string `json:"test_binary_build_commands,omitempty"`
+	TestBinaryBuildCommands string `json:"test_binary_build_commands,omitempty"` //TODO: this will have to allow multiples as well
 
 	// RpmBuildCommands will create an "rpms" image from "bin" (or "src", if no
 	// binary build commands were specified) that contains the output of this
 	// command. The created RPMs will then be served via HTTP to the "base" image
 	// via an injected rpm.repo in the standard location at /etc/yum.repos.d.
-	RpmBuildCommands string `json:"rpm_build_commands,omitempty"`
+	RpmBuildCommands string `json:"rpm_build_commands,omitempty"` //TODO: this will have to allow multiples as well
 	// RpmBuildLocation is where RPms are deposited after being built. If
 	// unset, this will default under the repository root to
 	// _output/local/releases/rpms/.
@@ -90,6 +93,12 @@ type ReleaseBuildConfiguration struct {
 	// input types. The special name '*' may be used to set default
 	// requests and limits.
 	Resources ResourceConfiguration `json:"resources,omitempty"`
+}
+
+type BinaryBuildCommandByRepo struct {
+	Repo     string `json:"repo"`
+	Command  string `json:"command"`
+	RefIndex int    `json:"ref_index"`
 }
 
 // Metadata describes the source repo for which a config is written
@@ -210,6 +219,8 @@ type InputConfiguration struct {
 	// the pipeline will caches on. The one way is to take the reference
 	// from an image stream, and the other from a dockerfile.
 	BuildRootImage *BuildRootImageConfiguration `json:"build_root,omitempty"`
+
+	BuildRoots map[string]BuildRootImageConfiguration `json:"build_roots,omitempty"` //TODO: this will either be mutually exclusive with, or replace build_root
 
 	// ReleaseTagConfiguration determines how the
 	// full release is assembled.
@@ -362,7 +373,7 @@ type CIOperatorInrepoConfig struct {
 // that the pipeline will caches on.
 type BuildRootImageConfiguration struct {
 	ImageStreamTagReference *ImageStreamTagReference          `json:"image_stream_tag,omitempty"`
-	ProjectImageBuild       *ProjectDirectoryImageBuildInputs `json:"project_image,omitempty"`
+	ProjectImageBuild       *ProjectDirectoryImageBuildInputs `json:"project_image,omitempty"` //TODO: this being set results in GitSourceStep being created
 	// If the BuildRoot images pullspec should be read from a file in the repository (BuildRootImageFileName).
 	FromRepository bool `json:"from_repository,omitempty"`
 
@@ -370,6 +381,8 @@ type BuildRootImageConfiguration struct {
 	// as a build cache, if the underlying build root has not changed since
 	// the previous cache was published.
 	UseBuildCache bool `json:"use_build_cache,omitempty"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 // ImageStreamTagReference identifies an ImageStreamTag
@@ -594,6 +607,8 @@ func (config *InputImageTagStepConfiguration) AddSources(sources ...ImageStreamS
 type InputImage struct {
 	BaseImage ImageStreamTagReference         `json:"base_image"`
 	To        PipelineImageStreamTagReference `json:"to,omitempty"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 type ImageStreamSourceType string
@@ -640,10 +655,12 @@ type PipelineImageCacheStepConfiguration struct {
 	// the repository root to create the cached
 	// content.
 	Commands string `json:"commands"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 func (config PipelineImageCacheStepConfiguration) TargetName() string {
-	return string(config.To)
+	return fmt.Sprintf("%s-%d", config.To, config.RefIndex)
 }
 
 // Cluster is the name of a cluster in CI build farm.
@@ -1951,6 +1968,7 @@ const (
 )
 
 // The fields in ReleaseBuildConfiguration which originate each pipeline image
+// TODO: these will likely need to be updated
 const (
 	PipelineImageStreamTagSourceRoot         = "build_root"
 	PipelineImageStreamTagSourceBinaries     = "binary_build_commands"
@@ -1971,10 +1989,12 @@ type SourceStepConfiguration struct {
 	// ClonerefsPath is the path in the above image where the
 	// clonerefs tool is placed
 	ClonerefsPath string `json:"clonerefs_path"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 func (config SourceStepConfiguration) TargetName() string {
-	return string(config.To)
+	return fmt.Sprintf("%s-%d", config.To, config.RefIndex)
 }
 
 // OperatorStepConfiguration describes the locations of operator bundle information,
@@ -2106,6 +2126,8 @@ type ProjectDirectoryImageBuildStepConfiguration struct {
 	// promoted unless explicitly targeted. Use for builds which
 	// are invoked only when testing certain parts of the repo.
 	Optional bool `json:"optional,omitempty"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 func (config ProjectDirectoryImageBuildStepConfiguration) TargetName() string {
@@ -2134,6 +2156,8 @@ type ProjectDirectoryImageBuildInputs struct {
 	// BuildArgs contains build arguments that will be resolved in the Dockerfile.
 	// See https://docs.docker.com/engine/reference/builder/#/arg for more details.
 	BuildArgs []BuildArg `json:"build_args,omitempty"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 type BuildArg struct {
@@ -2194,6 +2218,8 @@ func (config RPMImageInjectionStepConfiguration) TargetName() string {
 // a server from an image with RPMs and exposes it to the web.
 type RPMServeStepConfiguration struct {
 	From PipelineImageStreamTagReference `json:"from"`
+
+	RefIndex int `json:"ref_index,omitempty"`
 }
 
 func (config RPMServeStepConfiguration) TargetName() string {

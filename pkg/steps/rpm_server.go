@@ -52,10 +52,11 @@ func (s *rpmServerStep) Run(ctx context.Context) error {
 }
 
 func (s *rpmServerStep) run(ctx context.Context) error {
+	from := fmt.Sprintf("%s-%d", s.config.From, s.config.RefIndex)
 	ist := &imagev1.ImageStreamTag{}
 	if err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{
 		Namespace: s.jobSpec.Namespace(),
-		Name:      fmt.Sprintf("%s:%s", api.PipelineImageStream, s.config.From)},
+		Name:      fmt.Sprintf("%s:%s", api.PipelineImageStream, from)},
 		ist); err != nil {
 		return fmt.Errorf("could not find source ImageStreamTag for RPM repo deployment: %w", err)
 	}

@@ -142,7 +142,7 @@ func BuildCacheFor(metadata Metadata) ImageStreamTagReference {
 	}
 }
 
-func ImageVersionLabel(fromTag PipelineImageStreamTagReference) string {
+func ImageVersionLabel(fromTag string) string {
 	return fmt.Sprintf("io.openshift.ci.from.%s", fromTag)
 }
 

@@ -80,7 +80,7 @@ var (
 	JobSpecAnnotation = fmt.Sprintf("%s/%s", CiAnnotationPrefix, "job-spec")
 )
 
-func sourceDockerfile(fromTag api.PipelineImageStreamTagReference, workingDir string, cloneAuthConfig *CloneAuthConfig) string {
+func sourceDockerfile(fromTag string, workingDir string, cloneAuthConfig *CloneAuthConfig) string {
 	var dockerCommands []string
 	var secretPath string
 
@@ -101,7 +101,8 @@ func sourceDockerfile(fromTag api.PipelineImageStreamTagReference, workingDir st
 	}
 
 	dockerCommands = append(dockerCommands, fmt.Sprintf("RUN umask 0002 && /clonerefs && find %s/src -type d -not -perm -0775 | xargs --max-procs 10 --max-args 100 --no-run-if-empty chmod g+xw", gopath))
-	dockerCommands = append(dockerCommands, fmt.Sprintf("WORKDIR %s/", workingDir))
+	dockerCommands = append(dockerCommands, fmt.Sprintf("WORKDIR %s/", workingDir)) //TODO: I think this is how it only ends up building from one source
+	logrus.Infof("WORKDIR is: %s", workingDir)
 	dockerCommands = append(dockerCommands, fmt.Sprintf("ENV GOPATH=%s", gopath))
 
 	// After the clonerefs command, we don't need the secret anymore.
@@ -159,19 +160,22 @@ func (s *sourceStep) Run(ctx context.Context) error {
 }
 
 func (s *sourceStep) run(ctx context.Context) error {
+	logrus.Info("running SourceStep")
 	clonerefsRef, err := istObjectReference(ctx, s.client, s.config.ClonerefsImage)
 	if err != nil {
 		return fmt.Errorf("could not resolve clonerefs source: %w", err)
 	}
 
-	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, s.config.From, s.jobSpec)
+	fromTag := fmt.Sprintf("%s-%d", string(s.config.From), s.config.RefIndex)
+	fromDigest, err := resolvePipelineImageStreamTagReference(ctx, s.client, fromTag, s.jobSpec)
 	if err != nil {
 		return err
 	}
-	return handleBuilds(ctx, s.client, s.podClient, *createBuild(s.config, s.jobSpec, clonerefsRef, s.resources, s.cloneAuthConfig, s.pullSecret, fromDigest))
+	return handleBuilds(ctx, s.client, s.podClient, *createBuild(s.config, s.jobSpec, clonerefsRef, s.resources, s.cloneAuthConfig, s.pullSecret, fromDigest, s.config.RefIndex))
 }
 
-func createBuild(config api.SourceStepConfiguration, jobSpec *api.JobSpec, clonerefsRef corev1.ObjectReference, resources api.ResourceConfiguration, cloneAuthConfig *CloneAuthConfig, pullSecret *corev1.Secret, fromDigest string) *buildapi.Build {
+func createBuild(config api.SourceStepConfiguration, jobSpec *api.JobSpec, clonerefsRef corev1.ObjectReference, resources api.ResourceConfiguration, cloneAuthConfig *CloneAuthConfig, pullSecret *corev1.Secret, fromDigest string, refIndex int) *buildapi.Build {
+	//TODO: here is where the refs are utilized
 	var refs []prowv1.Refs
 	if jobSpec.Refs != nil {
 		r := *jobSpec.Refs
@@ -188,7 +192,9 @@ func createBuild(config api.SourceStepConfiguration, jobSpec *api.JobSpec, clone
 		refs = append(refs, r)
 	}
 
-	dockerfile := sourceDockerfile(config.From, decorate.DetermineWorkDir(gopath, refs), cloneAuthConfig)
+	onlyTheIndexedRef := []prowv1.Refs{refs[config.RefIndex]}
+	inputFrom := fmt.Sprintf("%s-%d", config.From, config.RefIndex)
+	dockerfile := sourceDockerfile(inputFrom, decorate.DetermineWorkDir(gopath, onlyTheIndexedRef), cloneAuthConfig)
 	buildSource := buildapi.BuildSource{
 		Type:       buildapi.BuildSourceDockerfile,
 		Dockerfile: &dockerfile,
@@ -246,7 +252,8 @@ func createBuild(config api.SourceStepConfiguration, jobSpec *api.JobSpec, clone
 		panic(fmt.Errorf("couldn't create JSON spec for clonerefs: %w", err))
 	}
 
-	build := buildFromSource(jobSpec, config.From, config.To, buildSource, fromDigest, "", resources, pullSecret, nil)
+	outputTo := fmt.Sprintf("%s-%d", config.To, config.RefIndex)
+	build := buildFromSource(jobSpec, inputFrom, outputTo, buildSource, fromDigest, "", resources, pullSecret, nil, refIndex)
 	build.Spec.CommonSpec.Strategy.DockerStrategy.Env = append(
 		build.Spec.CommonSpec.Strategy.DockerStrategy.Env,
 		corev1.EnvVar{Name: clonerefs.JSONConfigEnvVar, Value: optionsJSON},
@@ -255,7 +262,7 @@ func createBuild(config api.SourceStepConfiguration, jobSpec *api.JobSpec, clone
 	return build
 }
 
-func resolvePipelineImageStreamTagReference(ctx context.Context, client loggingclient.LoggingClient, tag api.PipelineImageStreamTagReference, jobSpec *api.JobSpec) (string, error) {
+func resolvePipelineImageStreamTagReference(ctx context.Context, client loggingclient.LoggingClient, tag string, jobSpec *api.JobSpec) (string, error) {
 	ist := &imagev1.ImageStreamTag{}
 	if err := client.Get(ctx, ctrlruntimeclient.ObjectKey{Namespace: jobSpec.Namespace(), Name: fmt.Sprintf("%s:%s", api.PipelineImageStream, tag)}, ist); err != nil {
 		return "", fmt.Errorf("could not resolve pipeline image stream tag %s: %w", tag, err)
@@ -263,9 +270,9 @@ func resolvePipelineImageStreamTagReference(ctx context.Context, client loggingc
 	return ist.Image.Name, nil
 }
 
-func buildFromSource(jobSpec *api.JobSpec, fromTag, toTag api.PipelineImageStreamTagReference, source buildapi.BuildSource, fromTagDigest, dockerfilePath string, resources api.ResourceConfiguration, pullSecret *corev1.Secret, buildArgs []api.BuildArg) *buildapi.Build {
+func buildFromSource(jobSpec *api.JobSpec, fromTag, toTag string, source buildapi.BuildSource, fromTagDigest, dockerfilePath string, resources api.ResourceConfiguration, pullSecret *corev1.Secret, buildArgs []api.BuildArg, refIndex int) *buildapi.Build {
 	logrus.Infof("Building %s", toTag)
-	buildResources, err := ResourcesFor(resources.RequirementsForStep(string(toTag)))
+	buildResources, err := ResourcesFor(resources.RequirementsForStep(toTag))
 	if err != nil {
 		panic(fmt.Errorf("unable to parse resource requirement for build %s: %w", toTag, err))
 	}
@@ -279,10 +286,10 @@ func buildFromSource(jobSpec *api.JobSpec, fromTag, toTag api.PipelineImageStrea
 	}
 
 	layer := buildapi.ImageOptimizationSkipLayers
-	labels := labelsFor(jobSpec, map[string]string{CreatesLabel: string(toTag)})
+	labels := labelsFor(jobSpec, map[string]string{CreatesLabel: toTag})
 	build := &buildapi.Build{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      string(toTag),
+			Name:      toTag,
 			Namespace: jobSpec.Namespace(),
 			Labels:    labels,
 			Annotations: map[string]string{

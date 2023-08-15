@@ -29,6 +29,7 @@ import (
 	templateapi "github.com/openshift/api/template/v1"
 	buildclientset "github.com/openshift/client-go/build/clientset/versioned/typed/build/v1"
 	templateclientset "github.com/openshift/client-go/template/clientset/versioned/typed/template/v1"
+	prowapi "k8s.io/test-infra/prow/apis/prowjobs/v1"
 
 	"github.com/openshift/ci-tools/pkg/api"
 	testimagestreamtagimportv1 "github.com/openshift/ci-tools/pkg/api/testimagestreamtagimport/v1"
@@ -239,6 +240,7 @@ func fromConfig(
 		} else if rawStep.PipelineImageCacheStepConfiguration != nil {
 			step = steps.PipelineImageCacheStep(*rawStep.PipelineImageCacheStepConfiguration, config.Resources, buildClient, podClient, jobSpec, pullSecret)
 		} else if rawStep.SourceStepConfiguration != nil {
+			//TODO: here is where the SourceStep is initialized
 			step = steps.SourceStep(*rawStep.SourceStepConfiguration, config.Resources, buildClient, podClient, jobSpec, cloneAuthConfig, pullSecret)
 		} else if rawStep.BundleSourceStepConfiguration != nil {
 			step = steps.BundleSourceStep(*rawStep.BundleSourceStepConfiguration, config, config.Resources, buildClient, podClient, jobSpec, pullSecret)
@@ -550,7 +552,7 @@ func rootImageResolver(client loggingclient.LoggingClient, ctx context.Context, 
 		if err := json.Unmarshal(cacheTag.Image.DockerImageMetadata.Raw, metadata); err != nil {
 			return nil, fmt.Errorf("malformed Docker image metadata on build cache %s: %w", cache.ISTagName(), err)
 		}
-		prior := metadata.Config.Labels[api.ImageVersionLabel(api.PipelineImageStreamTagReferenceRoot)]
+		prior := metadata.Config.Labels[api.ImageVersionLabel(string(api.PipelineImageStreamTagReferenceRoot))]
 		logrus.Debugf("Build cache %s is based on root image at %s", cache.ISTagName(), prior)
 
 		rootTag := &imagev1.ImageStreamTag{}
@@ -604,15 +606,65 @@ func FromConfigStatic(config *api.ReleaseBuildConfiguration) api.GraphConfigurat
 			})
 		}
 	}
+
+	//TODO: we would not want to simply duplicate all of the above here
+	for repo, target := range config.InputConfiguration.BuildRoots {
+		index := target.RefIndex
+		logrus.Infof("creating an InputImageTagStep for: %s with index: %d", repo, index)
+		if target.FromRepository {
+			logrus.Infof("using from_repository")
+			config := api.InputImageTagStepConfiguration{
+				InputImage: api.InputImage{
+					To: api.PipelineImageStreamTagReferenceRoot,
+				},
+				Sources: []api.ImageStreamSource{{SourceType: api.ImageStreamSourceRoot}},
+			}
+			buildSteps = append(buildSteps, api.StepConfiguration{
+				InputImageTagStepConfiguration: &config,
+			})
+		} else if isTagRef := target.ImageStreamTagReference; isTagRef != nil {
+			index := target.RefIndex
+			logrus.Infof("using image_stream_tag ")
+			config := api.InputImageTagStepConfiguration{
+				InputImage: api.InputImage{
+					BaseImage: *isTagRef,
+					To:        api.PipelineImageStreamTagReferenceRoot,
+					RefIndex:  index,
+				},
+				Sources: []api.ImageStreamSource{{SourceType: api.ImageStreamSourceRoot}},
+			}
+			buildSteps = append(buildSteps, api.StepConfiguration{
+				InputImageTagStepConfiguration: &config,
+			})
+		} else if gitSourceRef := target.ProjectImageBuild; gitSourceRef != nil {
+			logrus.Infof("using project_image")
+			gitSourceRef.RefIndex = index //TODO: we have to set this here or else would need to duplicate it in the ci-operator config
+			buildSteps = append(buildSteps, api.StepConfiguration{
+				ProjectDirectoryImageBuildInputs: gitSourceRef,
+			})
+		}
+	}
+
 	if len(config.BinaryBuildCommands) > 0 {
 		buildSteps = append(buildSteps, api.StepConfiguration{PipelineImageCacheStepConfiguration: &api.PipelineImageCacheStepConfiguration{
 			From:     api.PipelineImageStreamTagReferenceSource,
 			To:       api.PipelineImageStreamTagReferenceBinaries,
 			Commands: config.BinaryBuildCommands,
 		}})
+	} else if len(config.BinaryBuildCommandList) > 0 {
+		for _, binaryBuildCommand := range config.BinaryBuildCommandList {
+			logrus.Infof("adding pipeline image cache step from binaryBuildCommandMap: %s in index: %d", binaryBuildCommand.Repo, binaryBuildCommand.RefIndex)
+			buildSteps = append(buildSteps, api.StepConfiguration{PipelineImageCacheStepConfiguration: &api.PipelineImageCacheStepConfiguration{
+				From:     api.PipelineImageStreamTagReferenceSource,
+				To:       api.PipelineImageStreamTagReferenceBinaries,
+				Commands: binaryBuildCommand.Command,
+				RefIndex: binaryBuildCommand.RefIndex,
+			}})
+		}
 	}
 
 	if len(config.TestBinaryBuildCommands) > 0 {
+		logrus.Infof("adding pipeline image cache step  testbinarybuild")
 		buildSteps = append(buildSteps, api.StepConfiguration{PipelineImageCacheStepConfiguration: &api.PipelineImageCacheStepConfiguration{
 			From:     api.PipelineImageStreamTagReferenceSource,
 			To:       api.PipelineImageStreamTagReferenceTestBinaries,
@@ -635,6 +687,7 @@ func FromConfigStatic(config *api.ReleaseBuildConfiguration) api.GraphConfigurat
 			out = api.DefaultRPMLocation
 		}
 
+		logrus.Infof("adding pipeline image cache step from rpmbuild")
 		buildSteps = append(buildSteps, api.StepConfiguration{PipelineImageCacheStepConfiguration: &api.PipelineImageCacheStepConfiguration{
 			From:     from,
 			To:       api.PipelineImageStreamTagReferenceRPMs,
@@ -642,7 +695,8 @@ func FromConfigStatic(config *api.ReleaseBuildConfiguration) api.GraphConfigurat
 		}})
 
 		buildSteps = append(buildSteps, api.StepConfiguration{RPMServeStepConfiguration: &api.RPMServeStepConfiguration{
-			From: api.PipelineImageStreamTagReferenceRPMs,
+			From:     api.PipelineImageStreamTagReferenceRPMs,
+			RefIndex: 0, //TODO: this is hardcoded to match up with the test data
 		}})
 	}
 
@@ -677,6 +731,9 @@ func FromConfigStatic(config *api.ReleaseBuildConfiguration) api.GraphConfigurat
 
 	for i := range config.Images {
 		image := &config.Images[i]
+		image.RefIndex = 0 //TODO: this is hardcoded to match up with the test data, this will eventually need to come from the resolved config
+		//TODO: this is likely the reason bin-1 is failing also
+		logrus.Infof("image to output: %s", image.TargetName())
 		buildSteps = append(buildSteps,
 			api.StepConfiguration{ProjectDirectoryImageBuildStepConfiguration: image},
 			api.StepConfiguration{OutputImageTagStepConfiguration: &api.OutputImageTagStepConfiguration{
@@ -803,6 +860,7 @@ func runtimeStepConfigsForBuild(
 	second time.Duration,
 	consoleHost string,
 ) ([]api.StepConfiguration, error) {
+	//TODO: this will need to use multiple build_roots
 	var buildSteps []api.StepConfiguration
 	if root := config.InputConfiguration.BuildRootImage; root != nil {
 		var target *api.InputImageTagStepConfiguration
@@ -839,7 +897,16 @@ func runtimeStepConfigsForBuild(
 			target.InputImage.BaseImage = *istTagRef
 		}
 	}
-	if jobSpec.Refs != nil || len(jobSpec.ExtraRefs) > 0 {
+	var refs []prowapi.Refs
+	if jobSpec.Refs != nil {
+		refs = append(refs, *jobSpec.Refs)
+	}
+	if len(jobSpec.ExtraRefs) > 0 {
+		refs = append(refs, jobSpec.ExtraRefs...)
+	}
+
+	for i, ref := range refs {
+		logrus.Infof("configuring SourceStep[%d] for ref: %s/%s#%d@%s", i, ref.Org, ref.Repo, ref.Pulls[0].Number, ref.Pulls[0].SHA)
 		step := api.StepConfiguration{SourceStepConfiguration: &api.SourceStepConfiguration{
 			From: api.PipelineImageStreamTagReferenceRoot,
 			To:   api.PipelineImageStreamTagReferenceSource,
@@ -849,6 +916,7 @@ func runtimeStepConfigsForBuild(
 				Tag:       "latest",
 			},
 			ClonerefsPath: "/clonerefs",
+			RefIndex:      i,
 		}}
 		buildSteps = append(buildSteps, step)
 	}

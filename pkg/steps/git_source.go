@@ -9,6 +9,7 @@ import (
 	ctrlruntimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	buildapi "github.com/openshift/api/build/v1"
+	"github.com/sirupsen/logrus"
 
 	"github.com/openshift/ci-tools/pkg/api"
 	"github.com/openshift/ci-tools/pkg/kubernetes"
@@ -37,6 +38,7 @@ func (s *gitSourceStep) Run(ctx context.Context) error {
 
 func (s *gitSourceStep) run(ctx context.Context) error {
 	if refs := determineRefsWorkdir(s.jobSpec.Refs, s.jobSpec.ExtraRefs); refs != nil {
+		logrus.Infof("running GitSourceStep for %s/%s using index: %d", refs.Org, refs.Repo, s.config.RefIndex)
 		cloneURI := fmt.Sprintf("https://github.com/%s/%s.git", refs.Org, refs.Repo)
 		var secretName string
 		if s.cloneAuthConfig != nil {
@@ -44,7 +46,8 @@ func (s *gitSourceStep) run(ctx context.Context) error {
 			secretName = s.cloneAuthConfig.Secret.Name
 		}
 
-		return handleBuilds(ctx, s.buildClient, s.podClient, *buildFromSource(s.jobSpec, "", api.PipelineImageStreamTagReferenceRoot, buildapi.BuildSource{
+		toTag := fmt.Sprintf("%s-%d", string(api.PipelineImageStreamTagReferenceRoot), s.config.RefIndex)
+		return handleBuilds(ctx, s.buildClient, s.podClient, *buildFromSource(s.jobSpec, "", toTag, buildapi.BuildSource{
 			Type:         buildapi.BuildSourceGit,
 			Dockerfile:   s.config.DockerfileLiteral,
 			ContextDir:   s.config.ContextDir,
@@ -53,13 +56,15 @@ func (s *gitSourceStep) run(ctx context.Context) error {
 				URI: cloneURI,
 				Ref: refs.BaseRef,
 			},
-		}, "", s.config.DockerfilePath, s.resources, s.pullSecret, nil))
+		}, "", s.config.DockerfilePath, s.resources, s.pullSecret, nil, s.config.RefIndex))
 	}
 
 	return fmt.Errorf("nothing to build source image from, no refs")
 }
 
-func (s *gitSourceStep) Name() string { return string(api.PipelineImageStreamTagReferenceRoot) }
+func (s *gitSourceStep) Name() string {
+	return fmt.Sprintf("%s-%d", string(api.PipelineImageStreamTagReferenceRoot), s.config.RefIndex)
+}
 
 func (s *gitSourceStep) Description() string {
 	return fmt.Sprintf("Build git source code into an image and tag it as %s", api.PipelineImageStreamTagReferenceRoot)
