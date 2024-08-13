@@ -117,23 +117,6 @@
             },
             "node_architecture": "amd64"
           }
-        ],
-        "observers": [
-          {
-            "name": "resourcewatcher",
-            "from_image": {
-              "namespace": "ocp",
-              "name": "resourcewatcher",
-              "tag": "latest"
-            },
-            "commands": "#!/bin/bash\n\nsleep 300",
-            "resources": {
-              "requests": {
-                "cpu": "1000m",
-                "memory": "2Gi"
-              }
-            }
-          }
         ]
       }
     },
@@ -230,8 +213,7 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            },
-            "node_architecture": "amd64"
+            }
           }
         ]
       }
@@ -329,8 +311,7 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            },
-            "node_architecture": "amd64"
+            }
           }
         ]
       }

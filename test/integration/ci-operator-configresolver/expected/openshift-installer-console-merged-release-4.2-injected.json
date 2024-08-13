@@ -64,7 +64,8 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            }
+            },
+            "node_architecture": "amd64"
           },
           {
             "as": "ipi-install-install",
@@ -84,7 +85,8 @@
             ],
             "observers": [
               "resourcewatcher"
-            ]
+            ],
+            "node_architecture": "amd64"
           }
         ],
         "test": [
@@ -97,7 +99,8 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            }
+            },
+            "node_architecture": "amd64"
           }
         ],
         "post": [
@@ -110,7 +113,8 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            }
+            },
+            "node_architecture": "amd64"
           },
           {
             "as": "ipi-deprovision-deprovision",
@@ -121,24 +125,8 @@
                 "cpu": "1000m",
                 "memory": "2Gi"
               }
-            }
-          }
-        ],
-        "observers": [
-          {
-            "name": "resourcewatcher",
-            "from_image": {
-              "namespace": "ocp",
-              "name": "resourcewatcher",
-              "tag": "latest"
             },
-            "commands": "#!/bin/bash\n\nsleep 300",
-            "resources": {
-              "requests": {
-                "cpu": "1000m",
-                "memory": "2Gi"
-              }
-            }
+            "node_architecture": "amd64"
           }
         ]
       }
