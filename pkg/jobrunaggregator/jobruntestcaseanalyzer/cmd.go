@@ -18,9 +18,14 @@ import (
 
 const (
 	defaultMinimumSuccessfulTestCount int = 1
+<<<<<<< Updated upstream
 	// maxTimeout is our guess of the maximum duration for a job run
 	// Increasing timeout as per changes in https://github.com/openshift/release/pull/85106
 	maxTimeout time.Duration = 5*time.Hour + 55*time.Minute
+=======
+	// maxTimeout is the maximum supported analyzer runtime.
+	maxTimeout time.Duration = 6 * time.Hour
+>>>>>>> Stashed changes
 )
 
 var (
@@ -280,7 +285,7 @@ func (f *JobRunsTestCaseAnalyzerFlags) Validate() error {
 	}
 
 	if f.Timeout > maxTimeout {
-		return fmt.Errorf("timeout value of %s is out of range, valid value should be less than %s", f.Timeout, maxTimeout)
+		return fmt.Errorf("timeout value of %s is out of range, valid value should be at most %s", f.Timeout, maxTimeout)
 	}
 
 	if len(f.JobStateQuerySource) > 0 {
